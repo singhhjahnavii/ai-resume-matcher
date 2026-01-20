@@ -4,7 +4,7 @@ const multer = require('multer');
 const cors = require('cors');
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
-const path = require('path');
+const path = require('path'); // Add this
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,11 +12,11 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // Changed from 'public'
+app.use(express.static(path.join(__dirname, 'public'))); // Add path.join
 
 // Serve index.html at root
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public/index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html')); // Use path.join
 });
 
 // Configure file upload
@@ -54,22 +54,103 @@ async function extractDOCX(buffer) {
   }
 }
 
-// Simple keyword extraction
-function extractKeywords(text) {
-  const words = text.toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .filter(word => word.length > 3);
+// Common words to ignore (stopwords)
+const stopWords = new Set([
+  'the', 'and', 'for', 'with', 'this', 'that', 'from', 'will', 'have', 'has',
+  'are', 'was', 'were', 'been', 'being', 'but', 'not', 'can', 'could', 'should',
+  'would', 'may', 'might', 'must', 'shall', 'our', 'your', 'their', 'its',
+  'about', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+  'between', 'under', 'again', 'further', 'then', 'once', 'here', 'there',
+  'when', 'where', 'why', 'how', 'all', 'both', 'each', 'few', 'more', 'most',
+  'other', 'some', 'such', 'only', 'own', 'same', 'than', 'too', 'very',
+  'work', 'working', 'experience', 'years', 'team', 'company', 'role', 'position',
+  'responsibilities', 'requirements', 'skills', 'ability', 'strong', 'good',
+  'excellent', 'knowledge', 'understanding', 'including', 'required', 'preferred'
+]);
+
+// Technical skills and keywords database
+const technicalTerms = new Set([
+  // Programming Languages
+  'javascript', 'python', 'java', 'typescript', 'c++', 'ruby', 'php', 'swift',
+  'kotlin', 'go', 'rust', 'scala', 'r', 'matlab', 'perl', 'shell', 'bash',
   
-  const wordCount = {};
-  words.forEach(word => {
-    wordCount[word] = (wordCount[word] || 0) + 1;
+  // Frontend
+  'react', 'angular', 'vue', 'svelte', 'html', 'css', 'sass', 'less', 'webpack',
+  'nextjs', 'gatsby', 'tailwind', 'bootstrap', 'jquery', 'redux', 'mobx',
+  
+  // Backend
+  'nodejs', 'node.js', 'express', 'django', 'flask', 'spring', 'laravel',
+  'rails', 'fastapi', 'nestjs', 'graphql', 'rest', 'api', 'microservices',
+  
+  // Databases
+  'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'cassandra',
+  'dynamodb', 'oracle', 'sqlite', 'mariadb', 'nosql', 'firebase',
+  
+  // Cloud & DevOps
+  'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins', 'gitlab', 'github',
+  'terraform', 'ansible', 'ci/cd', 'devops', 'cloud', 'serverless', 'lambda',
+  
+  // Data Science & ML
+  'tensorflow', 'pytorch', 'keras', 'scikit-learn', 'pandas', 'numpy', 'jupyter',
+  'machine learning', 'deep learning', 'nlp', 'computer vision', 'data science',
+  
+  // Tools & Practices
+  'git', 'jira', 'agile', 'scrum', 'kanban', 'testing', 'junit', 'jest',
+  'cypress', 'selenium', 'tdd', 'bdd', 'linux', 'unix', 'nginx', 'apache',
+  
+  // Soft Skills
+  'leadership', 'communication', 'collaboration', 'problem-solving', 'analytical',
+  'mentoring', 'project management', 'stakeholder management'
+]);
+
+// Smart keyword extraction
+function extractKeywords(text) {
+  const normalizedText = text.toLowerCase()
+    .replace(/[^\w\s.-]/g, ' ')
+    .replace(/\s+/g, ' ');
+  
+  // Extract potential multi-word terms (like "machine learning", "project management")
+  const multiWordTerms = [];
+  technicalTerms.forEach(term => {
+    if (term.includes(' ') && normalizedText.includes(term)) {
+      multiWordTerms.push(term);
+    }
   });
   
-  return Object.entries(wordCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([word]) => word);
+  // Extract single words
+  const words = normalizedText.split(/\s+/)
+    .filter(word => {
+      // Keep if:
+      // 1. Length > 2
+      // 2. Not a stopword
+      // 3. Either a technical term OR contains numbers/special chars (like "c++", "node.js")
+      return word.length > 2 && 
+             !stopWords.has(word) && 
+             (technicalTerms.has(word) || /[\d+#.-]/.test(word));
+    });
+  
+  // Combine single words and multi-word terms
+  const allTerms = [...new Set([...multiWordTerms, ...words])];
+  
+  // Count occurrences
+  const termCount = {};
+  allTerms.forEach(term => {
+    const count = (normalizedText.match(new RegExp(term, 'gi')) || []).length;
+    termCount[term] = count;
+  });
+  
+  // Sort by relevance (technical terms first, then by frequency)
+  return Object.entries(termCount)
+    .sort((a, b) => {
+      const aIsTech = technicalTerms.has(a[0]);
+      const bIsTech = technicalTerms.has(b[0]);
+      
+      if (aIsTech && !bIsTech) return -1;
+      if (!aIsTech && bIsTech) return 1;
+      return b[1] - a[1]; // Sort by frequency
+    })
+    .slice(0, 30)
+    .map(([term]) => term);
 }
 
 // Analyze using Hugging Face Inference API (FREE)
@@ -79,20 +160,53 @@ async function analyzeWithHuggingFace(resumeText, jobDescription) {
     const resumeKeywords = extractKeywords(resumeText);
     const jdKeywords = extractKeywords(jobDescription);
     
-    // Find matched and missing keywords
-    const matchedSkills = resumeKeywords.filter(skill => 
-      jdKeywords.includes(skill)
-    ).slice(0, 6);
+    // Find matched skills (case-insensitive matching)
+    const matchedSkills = [];
+    const resumeSet = new Set(resumeKeywords.map(k => k.toLowerCase()));
     
-    const missingKeywords = jdKeywords.filter(skill => 
-      !resumeKeywords.includes(skill)
-    ).slice(0, 5);
+    jdKeywords.forEach(jdKeyword => {
+      const jdLower = jdKeyword.toLowerCase();
+      if (resumeSet.has(jdLower)) {
+        matchedSkills.push(jdKeyword);
+      }
+    });
     
-    // Calculate match score
-    const matchScore = Math.min(
-      Math.round((matchedSkills.length / Math.max(jdKeywords.length, 1)) * 100 + Math.random() * 10),
-      95
+    // Find missing keywords (important ones from JD not in resume)
+    const missingKeywords = jdKeywords
+      .filter(jdKeyword => {
+        const jdLower = jdKeyword.toLowerCase();
+        return !resumeSet.has(jdLower) && technicalTerms.has(jdLower);
+      })
+      .slice(0, 6);
+    
+    // Calculate match score based on matched technical skills
+    const technicalMatches = matchedSkills.filter(skill => 
+      technicalTerms.has(skill.toLowerCase())
     );
+    
+    const technicalRequirements = jdKeywords.filter(keyword => 
+      technicalTerms.has(keyword.toLowerCase())
+    );
+    
+    let matchScore = 0;
+    if (technicalRequirements.length > 0) {
+      matchScore = Math.round(
+        (technicalMatches.length / technicalRequirements.length) * 100
+      );
+    } else {
+      // Fallback if no technical terms found
+      matchScore = Math.round(
+        (matchedSkills.length / Math.max(jdKeywords.length, 1)) * 85
+      );
+    }
+    
+    // Cap at 95% (never show 100%)
+    matchScore = Math.min(matchScore, 95);
+    
+    // Ensure we have at least some matched skills to show
+    const displaySkills = matchedSkills.length > 0 
+      ? matchedSkills.slice(0, 8) 
+      : resumeKeywords.filter(k => technicalTerms.has(k.toLowerCase())).slice(0, 5);
     
     // Use Hugging Face API for text generation (suggestions)
     const HF_API_URL = 'https://api-inference.huggingface.co/models/facebook/bart-large-cnn';
@@ -100,9 +214,9 @@ async function analyzeWithHuggingFace(resumeText, jobDescription) {
     const prompt = `Resume analysis for job application:\n\nJob Requirements: ${jobDescription.substring(0, 200)}\n\nResume Summary: ${resumeText.substring(0, 200)}\n\nProvide 3 brief improvement suggestions for the resume:`;
     
     let improvements = [
-      "Quantify your achievements with specific metrics and numbers",
-      "Add more keywords from the job description to your skills section",
-      "Highlight relevant experience that matches the job requirements"
+      "Add quantifiable metrics to your achievements (e.g., 'Increased performance by 40%', 'Led team of 5 developers')",
+      "Include more technical keywords from the job description in your skills and experience sections",
+      "Highlight projects or experiences that directly relate to the key responsibilities mentioned in the job description"
     ];
     
     try {
@@ -135,24 +249,47 @@ async function analyzeWithHuggingFace(resumeText, jobDescription) {
     }
     
     // Extract position title from JD
-    const titleMatch = jobDescription.match(/(?:position|role|title|job):\s*([^\n,.]+)/i);
-    const positionTitle = titleMatch ? titleMatch[1].trim() : "Target Position";
+    const titlePatterns = [
+      /(?:position|role|title|job):\s*([^\n,.]+)/i,
+      /(?:hiring|seeking|looking for)\s+(?:a|an)?\s*([^\n,.]{10,50})/i,
+      /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})\s*$/m
+    ];
+    
+    let positionTitle = "Target Position";
+    for (const pattern of titlePatterns) {
+      const match = jobDescription.match(pattern);
+      if (match && match[1]) {
+        positionTitle = match[1].trim();
+        break;
+      }
+    }
     
     // Extract company name
-    const companyMatch = jobDescription.match(/(?:company|at|employer):\s*([^\n,.]+)/i);
-    const company = companyMatch ? companyMatch[1].trim() : "Target Company";
+    const companyPatterns = [
+      /(?:company|at|employer):\s*([^\n,.]+)/i,
+      /(?:join|work at|careers at)\s+([^\n,.]{2,30})/i
+    ];
+    
+    let company = "Target Company";
+    for (const pattern of companyPatterns) {
+      const match = jobDescription.match(pattern);
+      if (match && match[1]) {
+        company = match[1].trim();
+        break;
+      }
+    }
     
     const matchLevel = matchScore >= 80 ? "Strong Candidate Match" :
                        matchScore >= 60 ? "Good Candidate Match" :
-                       matchScore >= 40 ? "Moderate Candidate Match" : "Weak Candidate Match";
+                       matchScore >= 40 ? "Moderate Candidate Match" : "Potential Candidate Match";
     
     return {
       matchScore,
       matchLevel,
       positionTitle,
       company,
-      missingKeywords: missingKeywords.slice(0, 4),
-      skillsFound: matchedSkills,
+      missingKeywords: missingKeywords.slice(0, 5),
+      skillsFound: displaySkills,
       improvements
     };
     
